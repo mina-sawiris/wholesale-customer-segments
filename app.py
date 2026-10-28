@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import joblib
@@ -9,6 +10,8 @@ import streamlit as st
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 
+sys.path.insert(0, str(Path(__file__).parent))      
+from preprocess import preprocess_new_customer      
 # ----------------------------------------------------------------------------
 # 0. PAGE CONFIG + STYLE
 # ----------------------------------------------------------------------------
@@ -21,7 +24,16 @@ st.set_page_config(
 
 BASE_DIR = Path(__file__).parent
 FEATURES = ["Fresh", "Milk", "Grocery", "Frozen", "Detergents_Paper", "Delicatessen"]
-OUTLIER_INDICES = [65, 66, 75, 128, 154] 
+OUTLIER_INDICES = [65, 66, 75, 128, 154]
+HOVER = {"Customer #": True, "Dimension 1": ":.2f", "Dimension 2": ":.2f",
+         **{f: ":,.0f" for f in FEATURES}}
+
+EXAMPLES = {
+    "Restaurant": {"Fresh": 56159, "Milk": 555, "Grocery": 902, "Frozen": 10002,
+                   "Detergents_Paper": 212, "Delicatessen": 2916},
+    "Retailer": {"Fresh": 16117, "Milk": 46197, "Grocery": 92780, "Frozen": 1026,
+                 "Detergents_Paper": 40827, "Delicatessen": 2944},
+}
 
 SEGMENTS = {
     0: {
@@ -74,6 +86,17 @@ st.markdown(
 )
 
 
+_model_dir = BASE_DIR / "Model"
+_missing = []
+if not (BASE_DIR / "original_analysis" / "customers.csv").exists():
+    _missing.append("original_analysis/customers.csv")
+if not any((_model_dir / n).exists() for n in ("GMM_model.pkl", "gmm_model.pkl")):
+    _missing.append("Model/GMM_model.pkl")
+if _missing:
+    st.error("Missing file(s): " + ", ".join(_missing) + ". Check the project folder structure "
+             "(see README) and restart the app.")
+    st.stop()
+
 # ----------------------------------------------------------------------------
 # 1. DATA LOADING
 # ----------------------------------------------------------------------------
@@ -84,13 +107,20 @@ def load_raw_data() -> pd.DataFrame:
     return df.drop(["Region", "Channel"], axis=1)
 
 
+@st.cache_data
+def load_channel() -> pd.Series:
+    """The real 'Channel' label (never used by the model, only to check the segments)."""
+    df = pd.read_csv(BASE_DIR / "original_analysis" / "customers.csv")
+    return df["Channel"].map({1: "Hotel/Restaurant/Cafe", 2: "Retailer"})
+
+
 # ----------------------------------------------------------------------------
 # 2. PREPROCESSING           
 # ----------------------------------------------------------------------------
 def preprocess_input(values: dict) -> pd.DataFrame:
-    """Raw spending dict for ONE customer -> log-scaled 1-row DataFrame."""
-    row = pd.DataFrame([values], columns=FEATURES).astype(float)
-    return np.log(row.clip(lower=1))  # clip avoids log(0)
+    """Raw spending dict for ONE customer -> log-scaled 1-row DataFrame (Mina's function)."""
+    safe = {k: max(float(v), 1.0) for k, v in values.items()}   # log(0) is undefined: 1 is the minimum
+    return preprocess_new_customer(safe)
 
 
 def get_training_data(raw: pd.DataFrame) -> pd.DataFrame:
@@ -128,6 +158,10 @@ def compute_results():
     pca, gmm = load_models()
 
     reduced = pd.DataFrame(pca.transform(good_data), columns=["Dimension 1", "Dimension 2"])
+    keep = [i for i in raw.index if i not in OUTLIER_INDICES]          # rows that survived the outlier removal
+    raw_good = raw.loc[keep].reset_index(drop=True)
+    hover_df = pd.concat([pd.Series(keep, name="Customer #"), reduced, raw_good], axis=1)
+    channel = load_channel().loc[keep].reset_index(drop=True)
     preds = gmm.predict(reduced)
     score = silhouette_score(reduced, preds)
 
@@ -147,6 +181,9 @@ def compute_results():
         "centers_2d": gmm.means_,
         "true_centers": true_centers,
         "components": pca.components_,
+        "components_full": full_pca.components_,
+        "hover_df": hover_df,
+        "channel": channel,
     }
 
 
@@ -154,6 +191,15 @@ def compute_results():
 # 4. SIDEBAR  (global inputs, visible in every tab)
 # ----------------------------------------------------------------------------
 raw_df = load_raw_data()
+
+for _feat in FEATURES:                                   # starting value = dataset median
+    st.session_state.setdefault(f"in_{_feat}", int(raw_df[_feat].median()))
+
+
+def load_example(name: str):
+    for _feat, _val in EXAMPLES[name].items():
+        st.session_state[f"in_{_feat}"] = _val
+
 
 with st.sidebar:
     st.markdown("## 📦 New Customer")
@@ -167,12 +213,15 @@ with st.sidebar:
             feat.replace("_", " "),
             min_value=1,
             max_value=int(raw_df[feat].max() * 2),
-            value=int(raw_df[feat].median()),
             step=100,
             help=f"Dataset range: {int(raw_df[feat].min()):,} – {int(raw_df[feat].max()):,}  "
             f"(median {int(raw_df[feat].median()):,})",
             key=f"in_{feat}",
         )
+    st.caption("Or start from a real example customer:")
+    _c1, _c2 = st.columns(2)
+    _c1.button("🍽️ Restaurant", on_click=load_example, args=("Restaurant",))
+    _c2.button("🛒 Retailer", on_click=load_example, args=("Retailer",))
     st.divider()
     st.caption("Wholesale Customers · PCA + Gaussian Mixture Model")
 
@@ -235,6 +284,17 @@ with tab1:
         feat_choice = st.selectbox("Distribution of…", FEATURES, key="hist_feat")
         fig = px.histogram(raw_df, x=feat_choice, nbins=40, title=f"{feat_choice} spending distribution")
         st.plotly_chart(fig, width="stretch")
+    st.markdown("**How are the categories related?**")
+    view = st.radio("Correlation of…", ["Original spending", "Log-transformed spending"],
+                    horizontal=True, key="corr_view")
+    corr = (raw_df if view.startswith("Original") else np.log(raw_df)).corr()
+    fig = px.imshow(corr.round(2), text_auto=True, zmin=-1, zmax=1, aspect="auto",
+                    color_continuous_scale="RdBu_r", title=f"Correlation matrix ({view.lower()})")
+    st.plotly_chart(fig, width="stretch")
+    pairs = corr.where(np.triu(np.ones(corr.shape, dtype=bool), k=1)).stack().sort_values(ascending=False)
+    (a_, b_), top = pairs.index[0], pairs.iloc[0]
+    st.caption(f"Strongest pair: **{a_.replace('_', ' ')}** and **{b_.replace('_', ' ')}** "
+               f"(correlation {top:.2f}). Customers who buy one of them tend to buy the other.")
     st.info(
         "💡 Every category is **heavily right-skewed** (most customers spend little, a few "
         "spend a lot). That is why we apply a **log transform** before PCA."
@@ -288,6 +348,18 @@ with tab2:
         "are bought together (retail-style shopping). **Fresh, Frozen and Delicatessen** "
         "point in another direction (food-service shopping)."
     )
+    st.markdown("**What does each dimension mean?**")
+    weights = pd.DataFrame(
+        res["components_full"], columns=FEATURES,
+        index=[f"Dim {i + 1} ({v:.1%})" for i, v in enumerate(evr)],
+    )
+    fig = px.bar(weights.reset_index().melt(id_vars="index", var_name="Feature", value_name="Weight"),
+                 x="index", y="Weight", color="Feature", barmode="group",
+                 labels={"index": ""}, title="Feature weights of each principal component")
+    fig.add_hline(y=0, line_color="gray")
+    st.plotly_chart(fig, width="stretch")
+    st.caption("A tall bar means the feature matters a lot for that dimension. Bars pointing up and down "
+               "show features that move in opposite directions.")
     with st.expander("Feature weights for each dimension"):
         st.dataframe(
             pd.DataFrame(comps, columns=FEATURES, index=["Dimension 1", "Dimension 2"]).round(3),
@@ -309,14 +381,15 @@ with tab3:
     k2.metric("Segment 0 customers", int(counts[0]))
     k3.metric("Segment 1 customers", int(counts[1]))
 
-    red = res["reduced"].copy()
+    red = res["hover_df"].copy()
     red["Segment"] = [f"Segment 0 · {SEGMENTS[0]['name']}" if p == 0 else f"Segment 1 · {SEGMENTS[1]['name']}"
                       for p in res["preds"]]
     fig = px.scatter(
         red, x="Dimension 1", y="Dimension 2", color="Segment", opacity=0.65,
         color_discrete_sequence=[SEGMENTS[0]["color"], SEGMENTS[1]["color"]],
         category_orders={"Segment": sorted(red["Segment"].unique())},
-        title="GMM clusters in PCA space",
+        hover_data=HOVER,
+        title="GMM clusters in PCA space (hover a point to see the customer's spending)",
     )
     ctr = res["centers_2d"]
     fig.add_scatter(x=ctr[:, 0], y=ctr[:, 1], mode="markers", name="Cluster centers",
@@ -335,6 +408,29 @@ with tab3:
             <p>{s['reason']}</p><p><b>Delivery:</b> {s['delivery']}</p></div>""",
             unsafe_allow_html=True,
         )
+
+    # -- independent check: do the segments match the real Channel label? --
+    st.divider()
+    st.subheader("Do the segments match reality?")
+    st.write("The dataset also records each customer's real **Channel**. The model never saw it, "
+             "so comparing the two is an independent check.")
+    channel = res["channel"]
+    seg_name = pd.Series(res["preds"]).map({0: "Segment 0 (Retailers)", 1: "Segment 1 (Restaurants/Cafes)"})
+    match = ((res["preds"] == 0) & (channel == "Retailer")) | ((res["preds"] == 1) & (channel == "Hotel/Restaurant/Cafe"))
+    m_a, m_b = st.columns([1, 2])
+    m_a.metric("Agreement with the real channel", f"{match.mean():.1%}")
+    ct = pd.crosstab(seg_name.rename("Model segment"), channel.rename("Real channel"))
+    m_b.dataframe(ct, width="stretch")
+
+    chan = res["hover_df"].copy()
+    chan["Real channel"] = channel
+    fig = px.scatter(chan, x="Dimension 1", y="Dimension 2", color="Real channel", opacity=0.65,
+                     color_discrete_map={"Retailer": SEGMENTS[0]["color"],
+                                         "Hotel/Restaurant/Cafe": SEGMENTS[1]["color"]},
+                     hover_data=HOVER, title="The same customers, colored by their REAL channel")
+    st.plotly_chart(fig, width="stretch")
+    st.caption("Compare with the chart above: the colors almost match, so the unsupervised model "
+               "found the same two groups as the real business channels.")
 
 # ----------------------------------------------------------------------------
 # TAB 4 - BUSINESS TOOL
@@ -372,6 +468,11 @@ with tab4:
         p0, p1 = st.columns(2)
         p0.metric("Probability: Supermarket / Retailer", f"{probs[0]:.1%}")
         p1.metric("Probability: Restaurant / Café", f"{probs[1]:.1%}")
+        outside = [f.replace("_", " ") for f in FEATURES
+                   if not raw_df[f].min() <= user_inputs[f] <= raw_df[f].max()]
+        if outside:
+            st.warning("⚠️ Outside the range seen in the data: " + ", ".join(outside) +
+                       ". The prediction is less reliable for such values.")
         if max(probs) < 0.75:
             st.warning("⚠️ This customer sits near the border between the two segments. "
                        "Consider testing the 3-day schedule before rolling it out.")
