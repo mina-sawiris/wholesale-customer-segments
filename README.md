@@ -1,49 +1,101 @@
-# Content: Unsupervised Learning
-## Project: Creating Customer Segments
+# Wholesale Customer Segmentation
 
-### Install
+An interactive Streamlit dashboard that helps a wholesale distributor decide **which customers can move from 5-day to 3-day delivery** without hurting their business.
 
-This project requires **Python 2.7** and the following Python libraries installed:
+**Live demo:** _add your Streamlit link here_
 
-- [NumPy](http://www.numpy.org/)
-- [Pandas](http://pandas.pydata.org)
-- [matplotlib](http://matplotlib.org/)
-- [scikit-learn](http://scikit-learn.org/stable/)
+## The business problem
 
-You will also need to have software installed to run and execute a [Jupyter Notebook](http://jupyter.org/index.html)
+A wholesale distributor in Lisbon delivers to its customers five days a week. To cut costs, it wants to deliver only three days a week to some of them. The question is: **who will accept that, and who will not?**
 
-If you do not have Python installed yet, it is highly recommended that you install the [Anaconda](http://continuum.io/downloads) distribution of Python, which already has the above packages and more included. Make sure that you select the Python 2.7 installer and not the Python 3.x installer. 
+Using unsupervised machine learning (PCA and a Gaussian Mixture Model), the customers fall into two natural segments based on their annual spending:
 
-### Code
+| Segment | Who they are | What they buy | Recommendation |
+|---------|--------------|---------------|----------------|
+| 0 | Supermarkets / Retailers | Groceries, milk, detergents (non-perishable, bulk) | Move to a **3-day** delivery schedule |
+| 1 | Restaurants / Cafés | Mostly fresh food | **Keep 5-day** delivery |
 
-Template code is provided in the `customer_segments.ipynb` notebook file. You will also be required to use the included `visuals.py` Python file and the `customers.csv` dataset file to complete your work. While some code has already been implemented to get you started, you will need to implement additional functionality when requested to successfully complete the project. Note that the code included in `visuals.py` is meant to be used out-of-the-box and not intended for students to manipulate. If you are interested in how the visualizations are created in the notebook, please feel free to explore this Python file.
+## What the app does
 
-### Run
+The dashboard has a sidebar for entering a new customer's annual spending in six product categories (Fresh, Milk, Grocery, Frozen, Detergents_Paper, Delicatessen) and four tabs:
 
-In a terminal or command window, navigate to the top-level project directory `customer_segments/` (that contains this README) and run one of the following commands:
+1. **Data Overview**: the raw dataset and the spending distribution per category.
+2. **Dimensionality Reduction (PCA)**: explained variance and a biplot showing how products group together.
+3. **Customer Segmentation**: the Gaussian Mixture Model clusters and the silhouette score.
+4. **Business Tool (Prediction)**: enter a customer's spending, click **Predict**, and get the segment with a delivery recommendation.
 
-```bash
-ipython notebook customer_segments.ipynb
-```  
-or
-```bash
-jupyter notebook customer_segments.ipynb
+## Results
+
+- Silhouette score: **0.4223**
+- The two segments contain **155** and **280** customers.
+- The segments agree with the real `Channel` label (Hotel/Restaurant/Cafe vs. Retail) for **more than 85%** of customers, even though the model never used that label.
+
+## How it works
+
+1. **Preprocessing** (`preprocess.py`): spending values are log-transformed, the same transformation used in the original analysis. Five outlier customers are removed from the training data.
+2. **PCA**: reduces the six spending features to two dimensions.
+3. **Gaussian Mixture Model**: clusters customers into two segments and returns the probability of belonging to each.
+4. **Prediction**: a new customer goes through the same log transform, PCA, and GMM, and the app shows the segment probabilities with a delivery recommendation.
+
+## Project structure
+
+```
+wholesale-customer-segments/
+├── app.py                # Streamlit app (sidebar + 4 tabs)
+├── preprocess.py         # Preprocessing for new customers
+├── export_pca.py         # Re-creates Model/pca_model.pkl
+├── test_part.py          # Automated checks for the app
+├── requirements.txt
+├── Model/                # Trained PCA and GMM models
+└── original_analysis/    # Original analysis and customers.csv dataset
 ```
 
-This will open the Jupyter Notebook software and project file in your browser.
+## Run locally
+
+```bash
+git clone https://github.com/mina-sawiris/wholesale-customer-segments.git
+cd wholesale-customer-segments
+
+python -m venv venv
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # macOS / Linux
+
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The app opens at http://localhost:8501.
+
+### Run the tests
+
+```bash
+python test_part.py
+```
+
+The script checks that the app starts, that the silhouette score and segment sizes match the notebook, and that predictions for sample customers match the trained models.
+
+## Deployment
+
+The app is deployed on **Streamlit Community Cloud**:
+
+- Repository: this repository
+- Branch: `main`
+- Main file path: `app.py`
+
+## Tech stack
+
+Python, Streamlit, scikit-learn, pandas, NumPy, Plotly, joblib
 
 ## Data
 
-The customer segments data is included as a selection of 440 data points collected on data found from clients of a wholesale distributor in Lisbon, Portugal. More information can be found on the [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Wholesale+customers).
+[Wholesale customers dataset](https://archive.ics.uci.edu/ml/datasets/Wholesale+customers) from the UCI Machine Learning Repository: 440 customers of a wholesale distributor in Portugal. Values are annual spending in monetary units. The project is based on the "Creating Customer Segments" project from the Udacity Machine Learning curriculum.
 
-Note (m.u.) is shorthand for *monetary units*.
+## Team
 
-**Features**
-1) `Fresh`: annual spending (m.u.) on fresh products (Continuous); 
-2) `Milk`: annual spending (m.u.) on milk products (Continuous); 
-3) `Grocery`: annual spending (m.u.) on grocery products (Continuous); 
-4) `Frozen`: annual spending (m.u.) on frozen products (Continuous);
-5) `Detergents_Paper`: annual spending (m.u.) on detergents and paper products (Continuous);
-6) `Delicatessen`: annual spending (m.u.) on and delicatessen products (Continuous); 
-7) `Channel`: {Hotel/Restaurant/Cafe - 1, Retail - 2} (Nominal)
-8) `Region`: {Lisbon - 1, Oporto - 2, or Other - 3} (Nominal) 
+| Role | Member |
+|------|--------|
+| Data Pipeline Engineer | Mina |
+| Machine Learning Engineer | Heba |
+| Frontend & UI (Streamlit) | Shahd |
+| Visualization & Integration | Nemat |
+| DevOps & Documentation | Youssef |
