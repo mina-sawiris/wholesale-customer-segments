@@ -2,7 +2,7 @@
 
 An interactive Streamlit dashboard that helps a wholesale distributor decide **which customers can move from 5-day to 3-day delivery** without hurting their business.
 
-**Live demo:** _add your Streamlit link here_
+**Live demo:** [Streamlit](https://wholesale-customer-segments.streamlit.app/)
 
 ## The business problem
 
